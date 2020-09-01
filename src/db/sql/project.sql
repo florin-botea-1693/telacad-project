@@ -368,9 +368,38 @@ SELECT concat_ws(" ", user.firstname, user.lastname) as user_name FROM user
     ORDER BY count(article_has_view.user_id) DESC;
 
 -- =============== crt 4.3 (minim 3 functii de grup/having) folosite mai sus ============================================================ --
+# selectam numarul total de voturi obtinute de utilizatorul cu id 1
+SELECT count(comment_has_upvote.comment_id) FROM user
+	LEFT JOIN comment on user.id = comment.user_id
+    LEFT JOIN comment_has_upvote on comment.id = comment_has_upvote.comment_id
+    WHERE user.id = 1
+    GROUP BY user.id;
+    
+# selectam numarul de voturi obtinute in medie de utilizator 1 per comentariu
+SELECT avg(r.count_upvotes) FROM (
+	SELECT count(comment_has_upvote.comment_id) as count_upvotes FROM user
+		LEFT JOIN comment on user.id = comment.user_id
+		LEFT JOIN comment_has_upvote on comment.id = comment_has_upvote.comment_id
+		WHERE user.id = 1
+		GROUP BY comment.id
+) r;
 
+# selectam numarul total de voturi obtinute de un user
+SELECT count(comment_has_upvote.comment_id) as count_upvotes FROM user
+	LEFT JOIN comment on user.id = comment.user_id
+	LEFT JOIN comment_has_upvote on comment.id = comment_has_upvote.comment_id
+	WHERE user.id = 1
+	GROUP BY user.id;
+    
+# selectam tag-urile unui articol
+SELECT group_concat(tag.value separator ", ") FROM article
+	LEFT JOIN article_has_tag ON article.id = article_has_tag.article_id
+    INNER JOIN tag ON article_has_tag.tag_id = tag.id
+	WHERE article.id = 1;
+  
 -- =============== crt 4.4 (minim 3 funcţii predefinite MySQL: matematice, de comparare, condiţionale, pentru şiruri de 
 -- caractere, pentru date calendaristice) folosite ============================================================ --
+
 
 -- =============== crt 5 (minim 2 view) ============================================================ --
 
@@ -388,36 +417,35 @@ select * FROM comment_with_author;
 select * FROM article_preview_with_count_views;
 
 -- =============== crt 6 (minim 3 functii) ============================================================ --
-
 DELIMITER //
-CREATE FUNCTION get_article_comments_count(article_id int) returns int
+CREATE FUNCTION get_article_comments_count($article_id int) returns int
 begin
 	declare comments_count int;
 	SELECT count(article_id) into comments_count FROM comment
-		WHERE comment.article_id = article_id;
+		WHERE comment.article_id = $article_id;
 	return comments_count;
 end;
 //
 delimiter ;
 
 delimiter //
-CREATE FUNCTION get_article_views_count(article_id int) returns int
+CREATE FUNCTION get_article_views_count($article_id int) returns int
 begin
 	declare views_count int;
 	SELECT count(article_id) into views_count FROM article_has_view
-		WHERE article_has_view.article_id = article_id;
+		WHERE article_has_view.article_id = $article_id;
 	return views_count;
 end;
 //
 delimiter ;
 
 delimiter //
-CREATE FUNCTION user_has_voted_comment(user_id int, comment_id int) returns enum("true", "false")
+CREATE FUNCTION user_has_voted_comment($user_id int, $comment_id int) returns enum("true", "false")
 begin
 	declare has_upvoted varchar(5);
     declare count_records int;
 	SELECT count(comment_has_upvote.user_id) into count_records FROM comment_has_upvote
-		WHERE comment_has_upvote.user_id = user_id AND comment_has_upvote.comment_id = comment_id;
+		WHERE comment_has_upvote.user_id = $user_id AND comment_has_upvote.comment_id = $comment_id;
 	if (count_records > 0) then set has_upvoted = "true";
 		else set has_upvoted = "false";
 	end if;
@@ -431,7 +459,50 @@ select get_article_views_count(1);
 select user_has_voted_comment(1, 1);
 
 -- =============== crt 6 (minim 3 proceduri) ============================================================ --
+DELIMITER //
+CREATE PROCEDURE get_top_3_voted_users_by_comments(out pos1 varchar(50), out pos2 varchar(50), out pos3 varchar(50))
+begin
+	declare temp_users varchar(153);
+	SELECT GROUP_CONCAT(r.user_name SEPARATOR '|') INTO temp_users FROM (
+		SELECT concat(user.firstname, " ", user.lastname) as user_name FROM user
+			LEFT JOIN comment ON user.id = comment.user_id
+			LEFT JOIN comment_has_upvote ON comment.id = comment_has_upvote.comment_id
+			GROUP BY user.id ORDER BY count(user.id) DESC LIMIT 3
+	) r;
+    set pos1 = substring(temp_users, 1, locate("|", temp_users)-1);
+    set temp_users = substring(temp_users, locate("|", temp_users)+1);
+    set pos2 = substring(temp_users, 1, locate("|", temp_users)-1);
+    set temp_users = substring(temp_users, locate("|", temp_users)+1);
+	set pos3 = substring(temp_users, 1);
+end
+//
+DELIMITER ;
+call get_top_3_voted_users_by_comments(@pos1, @pos2, @pos3);
+select @pos1, @pos2, @pos3;
 
+DELIMITER //
+CREATE PROCEDURE get_user_comments_count(in $user_id int, out $count_comments int)
+begin
+	SELECT count(comment.user_id) into $count_comments FROM comment
+		WHERE comment.user_id = $user_id;
+end;
+//
+DELIMITER ;
+call get_user_comments_count(1, @count_comments);
+select @count_comments;
+
+DELIMITER //
+CREATE PROCEDURE get_article_tags(in $article_id int, out $tags varchar(255))
+begin
+	SELECT GROUP_CONCAT(tag.value SEPARATOR ', ') INTO $tags FROM article
+		LEFT JOIN article_has_tag ON article.id = article_has_tag.article_id
+		INNER JOIN tag ON article_has_tag.tag_id = tag.id
+		WHERE article.id = $article_id;
+end;
+//
+DELIMITER ;
+call get_article_tags(1, @tags);
+select @tags;
 -- =============== crt 6 (minim 3 cursori) ============================================================ --
 
 -- =============== crt 6 (minim 3 triggeri) ============================================================ --
