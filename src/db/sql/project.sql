@@ -7,6 +7,8 @@ CREATE TABLE user (
     firstname varchar(25),
     lastname varchar(25),
     email varchar(50) not null,
+    count_votes int default 0, -- adaugat ulterior pentru cursori si triggeri
+    count_articles int default 0, -- adaugat ulterior pentru cursori si triggeri
     -- password char(64) not null, -- base64 encoded
 	created_at timestamp default now(),
     updated_at timestamp default now()
@@ -17,6 +19,7 @@ CREATE TABLE article (
     title varchar(180) not null,
     text text not null,
     user_id int not null,
+    computed_tags varchar(70) default null, -- adaugat ulterior pentru cursori si triggeri
     created_at timestamp default now(),
     updated_at timestamp default now(),
     
@@ -39,13 +42,14 @@ CREATE TABLE comment (
 	id int primary key auto_increment,
     text tinytext not null,
     user_id int not null,
-    -- parent_id int default null, 
+    -- parent_id int default null, -- adaugat prin alter table mai jos
     article_id int not null,
+    count_votes int default 0, -- adaugat ulterior pentru cursori si triggeri
 	created_at timestamp default now(),
     updated_at timestamp default now(),
     
     CONSTRAINT author FOREIGN KEY(user_id) REFERENCES user(id),
-    -- FOREIGN KEY(parent_id) REFERENCES comment(id),
+	-- FOREIGN KEY(parent_id) REFERENCES comment(id),
     CONSTRAINT article FOREIGN KEY(article_id) REFERENCES article(id)
 );
 
@@ -103,11 +107,11 @@ ALTER TABLE comment
 INSERT INTO user (firstname, lastname, email) VALUES
 	("Florin", "Botea", "florinbotea1693@gmail.com"),
 	("Nealson", "Orrin", "norrin1@soup.io"),
-	("Beret", "Longmate", "blongmate0@imdb.com"),
-	("Hunt", "Snel", "hsnel2@blogger.com"),
+	("Beret", "Longmate", "blongmate0@gmail.com"),
+	("Hunt", "Snel", "hsnel2@gmail.com"),
 	("Arliene", "Bende", "abende3@ftc.gov"),
 	("Arliene", "d' Elboux", "tdelboux4@apple.com"),
-	("Giff", "Tackle", "gtackle5@squidoo.com"),
+	("Giff", "Tackle", "gtackle5@gmail.com"),
 	("Wallache", "Aronstam", "waronstam6@amazonaws.com"),
 	("Mildred", "McGahern", "mmcgahern7@zdnet.com"),
 	("Stevie", "Abbatt", "sabbatt8@amazon.co.uk"),
@@ -399,7 +403,17 @@ SELECT group_concat(tag.value separator ", ") FROM article
   
 -- =============== crt 4.4 (minim 3 funcţii predefinite MySQL: matematice, de comparare, condiţionale, pentru şiruri de 
 -- caractere, pentru date calendaristice) folosite ============================================================ --
+# inseram un articol care sa aiba o vechime de 5 zile
+insert into article(title, text, user_id, created_at, updated_at) values
+	("titlu articol inserat la linia 408", "text articol inserat la linia 408", 1, date_sub(now(), interval 5 day), date_sub(now(), interval 5 day));
 
+# selectam articolele din luna curenta
+select title from article where
+	month(created_at) = month(now());
+
+# cati useri cu adresa de gmail am?
+select count(id) from user
+	where email like '%@gmail.com';
 
 -- =============== crt 5 (minim 2 view) ============================================================ --
 
@@ -504,5 +518,183 @@ DELIMITER ;
 call get_article_tags(1, @tags);
 select @tags;
 -- =============== crt 6 (minim 3 cursori) ============================================================ --
+# fac update de comment.count_votes bazandu-ma pe totalul voturilor 
+# (pot obtine acelasi rezultat mai simplu prin subquery, dar voi folosi cursori)
+delimiter //
+create procedure update_comment_count_votes(in $comment_id int)
+begin
+	declare $hasMore enum('true', 'false') default "true";
+    declare $loop_id int;
+    declare $count_votes int default 0;
+    
+	declare c cursor for select comment_id from comment_has_upvote;
+    declare continue handler for not found
+    begin
+		set $hasMore = "false";
+    end;
+    
+    open c;
+    lup: loop
+		fetch c into $loop_id;
+		if $hasMore = "false" then 
+			leave lup;
+		end if;
+        if $loop_id = $comment_id then
+			set $count_votes = $count_votes + 1;
+		end if;
+	end loop lup;
+    close c;
+    update comment set count_votes = $count_votes;
+end;
+//
+delimiter ;
+call update_comment_count_votes(1);
+select * from comment where id = 1;
+
+# update article.computed_tags
+delimiter //
+create procedure update_article_computed_tags(in $article_id int)
+begin
+	declare $hasMore enum('true', 'false') default "true";
+    declare $concat_tags varchar(70);
+    declare $loop_tag varchar(25) default "";
+    
+	declare c cursor for select tag.value from article
+		left join article_has_tag on article.id = article_has_tag.article_id
+        inner join tag on article_has_tag.tag_id = tag.id
+        where article.id = $article_id;
+    declare continue handler for not found
+    begin
+		set $hasMore = "false";
+    end;
+    
+    open c;
+    lup: loop
+		fetch c into $loop_tag;
+		if $hasMore = "false" then 
+			leave lup;
+		end if;
+        if length($concat_tags) > 0 then -- evit urmatorul rezultat: ", tag1, tag2"
+			set $concat_tags = concat_ws(", ", $concat_tags, $loop_tag);
+            else 
+            set $concat_tags = $loop_tag;
+		end if;
+	end loop lup;
+    close c;
+    update article set computed_tags = $concat_tags;
+end;
+//
+delimiter ;
+call update_article_computed_tags(1);
+select * from article where id = 1;
+
+# update user.count_votes 
+delimiter //
+create procedure update_user_count_votes(in $user_id int)
+begin
+	declare $hasMore enum('true', 'false') default "true";
+    declare $count_votes int default 0;
+    declare $loop_vootes int;
+    
+	declare c cursor for select count(comment.id) from comment
+		left join comment_has_upvote on comment.id = comment_has_upvote.comment_id
+        where comment.user_id = $user_id
+        group by comment.id;
+    declare continue handler for not found
+    begin
+		set $hasMore = "false";
+    end;
+    
+    open c;
+    lup: loop
+		fetch c into $loop_vootes;
+		if $hasMore = "false" then 
+			leave lup;
+		end if;
+        set $count_votes = $count_votes + $loop_vootes;
+	end loop lup;
+    close c;
+    update user set count_votes = $count_votes;
+end;
+//
+delimiter ;
+call update_user_count_votes(1);
+select * from user where id = 1;
 
 -- =============== crt 6 (minim 3 triggeri) ============================================================ --
+# actualizam automat user.count_votes, comment.count_votes
+delimiter //
+create trigger update_user_count_votes after insert on comment_has_upvote for each row
+begin
+	update comment set count_votes = (
+		select count(comment_id) from comment_has_upvote
+			where comment_id = new.comment_id
+    ) where comment.id = new.comment_id;
+end;
+//
+delimiter ;
+update comment set count_votes = 0; -- pentru a evita orice confuzie cauzata de procedurile si functiile anterioare
+select * from comment where id = 5; -- 0
+insert into comment_has_upvote(comment_id, user_id) values
+    (5, 9),
+    (5, 10);-- am dat 2 voturi de la 2 useri diferiti
+select * from comment where id = 5;
+
+# voi restructura modul in care functioneaza tabela comentarii pentru a evita orice recursive select
+# voi adauga o coloana comment_path care va avea valori pe modelul '1/2/3' 
+# semnificand: actualul comentariu e reply la 3, care e reply la 2, care e reply la 1
+truncate comment;
+alter table comment
+    add column comment_path varchar(255) default null;
+    
+delimiter //
+create trigger pre_set_comment_path before insert on comment for each row
+begin
+	declare $comment_path varchar(255);
+	if !isnull(new.parent_id) then
+		select concat_ws("/", comment_path, id) into $comment_path from comment where id = new.parent_id; -- din fericire concat_ws("/", null, x) returneaza x, nu /x
+        set new.comment_path = $comment_path;
+    end if;
+end;
+//
+delimiter ;
+
+# acum facem insert-uri de mai multe comentarii care sa constituie un thread multi-ramificat
+insert into comment (text, user_id, parent_id, article_id) values
+	("comentariu root", 1, null, 1),
+    ("reply la comentariul 1", 2, 1, 1),
+    ("reply la comentariul 2", 3, 2, 1),
+    ("reply la comentariul 2", 4, 2, 1),
+    ("reply la comentariul 4", 1, 4, 1);
+insert into comment (text, user_id, parent_id, article_id) values
+	("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, null, 1),
+    ("comentariu care nu are legatura cu thread-ul", 1, 12, 1);
+
+select * from comment;
+# acum pot avea select-uri mai complexe, ca de exemplu: selecteaza-mi tot thread-ul pe care se afla comment cu id 3
+select * from comment
+	left join comment as tc on 
+    comment.comment_path rlike REGEXP_SUBSTR(tc.comment_path, "^[0-9]+") -- intoarce x din sirul x/y/z sau x normal
+    or comment.id = REGEXP_SUBSTR(tc.comment_path, "^[0-9]+") -- intorc si root comment, care nu ar fi fost alaturat prin prima clauza
+	where tc.id = 3;
+
+# atunci cand un user isi sterge contul, toate articolele lui vor fi preluate de user Anonim
+insert into user(id, firstname, lastname, email) values (9999, "anonim", "user", "xyz@gmail.com");
+delimiter //
+create trigger make_articles_anonim before delete on user for each row
+begin
+	update article set user_id = 9999 where user_id = old.id;
+    update article_has_view set user_id = 9999 where user_id = old.id;
+end;
+//
+delimiter ;
+ 
+select * from article;
+delete from user where id = 1; -- Asta sunt eu..... Aici ies din scena sub anonimat:D
+select * from article;
